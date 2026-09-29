@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Коллекция</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #15112b; --panel: #211a44; --text: #f3efff; --muted: #9b93c7;
+    --common: #b8b8cc; --rare: #4aa8ff; --epic: #b56cff; --legendary: #ffc23d;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 20px 16px calc(28px + env(safe-area-inset-bottom)); min-height: 100vh; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
+  #progress { color: var(--muted); font-size: 15px; }
+  .bar { height: 6px; background: var(--panel); border-radius: 3px; overflow: hidden; margin-bottom: 20px; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--rare), var(--epic), var(--legendary)); transition: width .8s cubic-bezier(.2,.8,.2,1); }
+  #grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (min-width: 560px) { #grid { grid-template-columns: repeat(3, 1fr); } }
+
+  .card { position: relative; aspect-ratio: 5/7; border-radius: 14px; overflow: hidden; border: 2px solid var(--c);
+    background: var(--panel); padding: 0; cursor: pointer; color: inherit;
+    box-shadow: 0 0 0 0 var(--c); transition: transform .2s, box-shadow .3s; }
+  .card:active { transform: scale(.97); }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .card.locked { border-color: #34295f; cursor: default; display: grid; place-items: center; font-size: 44px; color: #4a3f80; }
+  .card .badge { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,.65); border-radius: 10px; padding: 1px 8px; font-size: 13px; }
+  .common { --c: var(--common); } .rare { --c: var(--rare); } .epic { --c: var(--epic); } .legendary { --c: var(--legendary); }
+  .legendary:not(.locked) { animation: glow 2.4s ease-in-out infinite; }
+  @keyframes glow { 50% { box-shadow: 0 0 22px 2px var(--c); } }
+  .appear { animation: pop .5s cubic-bezier(.2,1.3,.4,1) both; }
+  @keyframes pop { from { opacity: 0; transform: scale(.85); } }
+
+  #modal { position: fixed; inset: 0; background: rgba(10,7,25,.88); display: none; place-items: center; z-index: 10; perspective: 900px; }
+  #modal.open { display: grid; animation: fade .2s both; }
+  @keyframes fade { from { opacity: 0; } }
+  #big { width: min(72vw, 340px); aspect-ratio: 5/7; border-radius: 18px; overflow: hidden; position: relative;
+    border: 3px solid var(--c); box-shadow: 0 20px 60px rgba(0,0,0,.6), 0 0 40px -6px var(--c);
+    transform-style: preserve-3d; touch-action: none; transition: transform .15s ease-out; animation: flip .6s cubic-bezier(.2,.9,.3,1) both; }
+  @keyframes flip { from { transform: rotateY(180deg) scale(.7); opacity: 0; } }
+  #big img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #big::after { content: ""; position: absolute; inset: 0; pointer-events: none; mix-blend-mode: overlay;
+    background: radial-gradient(circle at var(--mx,50%) var(--my,30%), rgba(255,255,255,.55), transparent 55%); }
+  #info { position: absolute; bottom: calc(40px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; }
+  #info b { font-size: 22px; display: block; }
+  #info span { color: var(--muted); }
+  #msg { text-align: center; color: var(--muted); padding: 40px 0; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header><h1>Коллекция</h1><div id="progress"></div></header>
+<div class="bar"><i id="fill"></i></div>
+<div id="grid"></div>
+<div id="msg">Загрузка…</div>
+
+<div id="modal"><div id="big"><img alt=""></div><div id="info"></div></div>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready(); tg.expand();
+tg.setHeaderColor("#15112b"); tg.setBackgroundColor("#15112b");
+
+const RARITY = { common: "Обычная", rare: "Редкая", epic: "Эпическая", legendary: "Легендарная" };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const img = (c) => "cards/" + c.image;   // картинки лежат рядом, на GitHub Pages
+
+// адрес API передаёт бот: .../?api=https%3A%2F%2Fxxxx.trycloudflare.com
+const API = (new URLSearchParams(location.search).get("api") || "").replace(/\/$/, "");
+
+async function load() {
+  try {
+    if (!/^https:\/\//.test(API)) throw new Error("no api");
+    const r = await fetch(API + "/api/collection", { headers: { Authorization: "tma " + tg.initData } });
+    if (!r.ok) throw new Error(r.status);
+    render((await r.json()).cards);
+  } catch (e) {
+    $("msg").textContent = "Не удалось загрузить коллекцию. Проверь, что бот запущен, и открой приложение заново кнопкой из бота.";
+  }
+}
+
+function render(cards) {
+  const owned = cards.filter((c) => c.count > 0).length;
+  $("progress").textContent = owned + " из " + cards.length;
+  $("fill").style.width = (owned / cards.length * 100) + "%";
+  $("msg").style.display = owned ? "none" : "block";
+  if (!owned) $("msg").textContent = "Пока пусто. Отправь боту /free, чтобы получить первую карточку.";
+  const grid = $("grid");
+  grid.innerHTML = "";
+  cards.forEach((c, i) => {
+    const el = document.createElement("button");
+    el.className = "card appear " + c.rarity + (c.count ? "" : " locked");
+    el.style.animationDelay = i * 60 + "ms";
+    if (c.count) {
+      el.innerHTML = '<img src="' + esc(img(c)) + '" alt="' + esc(c.name) + '">' +
+        (c.count > 1 ? '<span class="badge">×' + c.count + "</span>" : "");
+      el.onclick = () => openCard(c);
+    } else {
+      el.textContent = "?";
+    }
+    grid.appendChild(el);
+  });
+}
+
+const big = $("big"), modal = $("modal");
+function openCard(c) {
+  big.className = c.rarity;
+  big.querySelector("img").src = img(c);
+  big.style.animation = "none"; void big.offsetWidth; big.style.animation = "";
+  $("info").innerHTML = "<b>" + esc(c.name) + "</b><span>" + RARITY[c.rarity] + "</span>";
+  modal.classList.add("open");
+  tg.HapticFeedback && tg.HapticFeedback.impactOccurred(c.rarity === "legendary" ? "heavy" : "light");
+}
+modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
+modal.addEventListener("pointermove", (e) => {
+  const r = big.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+  big.style.transform = "rotateY(" + (x - .5) * 28 + "deg) rotateX(" + (.5 - y) * 28 + "deg)";
+  big.style.setProperty("--mx", x * 100 + "%"); big.style.setProperty("--my", y * 100 + "%");
+});
+modal.addEventListener("pointerleave", () => { big.style.transform = ""; });
+
+load();
+</script>
+</body>
+</html>
